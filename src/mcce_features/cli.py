@@ -90,11 +90,19 @@ def extract_subfolders_cmd(
         help=("Path to a folder with a collection of simulation folders. "
               "Those with a book.txt file will be processed."),
     ),
-    output_file: str = typer.Option(core.FEATURES_TSV,
-                                    help="Output TSV file name.")
+    collated_features_tsv: str = typer.Option(
+        core.FEATURES_TSV,
+        help="Collated features TSV filename (not filepath)."
+    ),
+    subfolders_startwith: str = typer.Option(
+        "",
+        help=("Only process subfolders in simulations_folder whose names startwith this string. "
+              "If given, the collated file will start with that string as well if collated_features_tsv is the default name."
+              "Enables collating over chunked datasets."),
+    ),
 ):
     """Extract electrostatic features from multiple sets of MCCE folders."""
-    core.extract_subfolders_with_book(simulations_folder, output_file)
+    core.extract_subfolders_with_book(simulations_folder, subfolders_startwith, collated_features_tsv)
 
 
 if __name__ == "__main__":
