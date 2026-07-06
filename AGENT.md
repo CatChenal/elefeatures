@@ -45,7 +45,7 @@ breaking change:
 mcce-features version
 mcce-features extract <mcce_folder>
 mcce-features extract-folders <folder_file> --output-file <output.tsv>
-mcce-features extract-subfolders-with-book <simulations_folder> --output-file <output.tsv>
+mcce-features extract-subfolders-with-book <simulations_folder> --collated-features-tsv <output.tsv> --subfolders-startwith <"">
 ```
 
 Useful local checks:
