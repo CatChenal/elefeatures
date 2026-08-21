@@ -202,6 +202,18 @@ def _ph_label(ph: float) -> str:
     return f"{ph:.1f}"
 
 
+def test_pkout(pka_file) -> bool:
+    """pK.out can contain bytecodes: unreadable in normal read mode.
+    This can append when the protein has no ionizable residues.
+    """
+    try:
+        with open(pka_file) as fh:
+            _ = fh.readline()
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
 class MCCEFeatureExtractor:
     """
     A feature extractor for MCCE output files.
@@ -450,6 +462,11 @@ class MCCEFeatureExtractor:
                     "pH column count does not match Net_Charge column count in %s",
                     sum_charge_file,
                 )
+            elif len(net_charge_values) == 1 and net_charge_values[0] == 0.0:
+                # case for protein with non-ionizable res, e.g. Collagen:
+                # sum_crg.out has no data rows and Net crg is 0.0:
+                # no need for calculation
+                isoelectric_point = ph_values[0]
             else:
                 # Net charge at pH 7.0
                 try:
@@ -1358,11 +1375,12 @@ class MCCEFeatureExtractor:
         sum_charge_file = f"{self.mcce_folder}/sum_crg.out"
         sasa_file = f"{self.mcce_folder}/acc.res"
         pka_file = f"{self.mcce_folder}/pK.out"
-        
+        pka_file_ok = test_pkout(pka_file)
+
         logger.debug("Initializing residue properties from MCCE output files")
         logger.debug("Charge file: %s", sum_charge_file)
         logger.debug("SASA file:   %s", sasa_file)
-        logger.debug("pKa file:    %s", pka_file)
+        logger.debug("pKa file:    %s; file OK: %s", pka_file, pka_file_ok)
 
         def normalize_mcce_residue_id(raw_id: str) -> str:
             """
@@ -1539,66 +1557,67 @@ class MCCEFeatureExtractor:
         skipped_pka_lines = 0
         non_numeric_pka_count = 0
 
-        with open(pka_file, "r") as f:
-            for line in f:
-                fields = line.split()
+        if pka_file_ok:
+            with open(pka_file, "r") as f:
+                for line in f:
+                    fields = line.split()
 
-                if not fields:
-                    continue
-
-                # Skip header
-                if fields[0] == "pH":
-                    continue
-
-                raw_res_id = fields[0]
-
-                # Skip separator or malformed lines
-                if raw_res_id.startswith("-"):
-                    skipped_pka_lines += 1
-                    continue
-
-                if len(fields) < 2:
-                    skipped_pka_lines += 1
-                    continue
-
-                residue_id = normalize_mcce_residue_id(raw_res_id)
-
-                # Normal case:
-                # LYS+A0001_  9.547  0.978  0.008
-                #
-                # Non-number cases may appear as:
-                # ASP-A0018_  < 0.0
-                # LYS+A0013_  > 14.0
-                pka = safe_float(fields[1])
-
-                if pka is None:
-                    non_numeric_pka_count += 1
-
-                    residue = residue_by_id.get(residue_id)
-
-                    if residue is not None and residue.is_acidic:
-                        pka = 0.0
-                    elif residue is not None and residue.is_basic:
-                        pka = 14.0
-                    else:
-                        skipped_pka_lines += 1
-                        logger.debug(
-                            "Skipping non-numeric pKa for non-acid/basic residue %s: %s",
-                            residue_id,
-                            line.rstrip(),
-                        )
+                    if not fields:
                         continue
 
-                pka_by_id[residue_id] = pka
+                    # Skip header
+                    if fields[0] == "pH":
+                        continue
 
-                pka_lines += 1
-                pka_values_loaded += 1
+                    raw_res_id = fields[0]
 
-        logger.debug(
-            "Loaded pKa values for %d residues from %s",
-            pka_values_loaded,
-            pka_file,
-        )
+                    # Skip separator or malformed lines
+                    if raw_res_id.startswith("-"):
+                        skipped_pka_lines += 1
+                        continue
+
+                    if len(fields) < 2:
+                        skipped_pka_lines += 1
+                        continue
+
+                    residue_id = normalize_mcce_residue_id(raw_res_id)
+
+                    # Normal case:
+                    # LYS+A0001_  9.547  0.978  0.008
+                    #
+                    # Non-number cases may appear as:
+                    # ASP-A0018_  < 0.0
+                    # LYS+A0013_  > 14.0
+                    pka = safe_float(fields[1])
+
+                    if pka is None:
+                        non_numeric_pka_count += 1
+
+                        residue = residue_by_id.get(residue_id)
+
+                        if residue is not None and residue.is_acidic:
+                            pka = 0.0
+                        elif residue is not None and residue.is_basic:
+                            pka = 14.0
+                        else:
+                            skipped_pka_lines += 1
+                            logger.debug(
+                                "Skipping non-numeric pKa for non-acid/basic residue %s: %s",
+                                residue_id,
+                                line.rstrip(),
+                            )
+                            continue
+
+                    pka_by_id[residue_id] = pka
+
+                    pka_lines += 1
+                    pka_values_loaded += 1
+
+            logger.debug(
+                "Loaded pKa values for %d residues from %s",
+                pka_values_loaded,
+                pka_file,
+            )
 
         # ------------------------------------------------------------
         # Adding pKa0 values to residues based on their type
