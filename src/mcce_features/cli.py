@@ -90,19 +90,38 @@ def extract_subfolders_cmd(
         help=("Path to a folder with a collection of simulation folders. "
               "Those with a book.txt file will be processed."),
     ),
-    collated_features_tsv: str = typer.Option(
-        core.FEATURES_TSV,
-        help="Collated features TSV filename (not filepath)."
-    ),
     subfolders_startwith: str = typer.Option(
         "",
         help=("Only process subfolders in simulations_folder whose names startwith this string. "
-              "If given, the collated file will start with that string as well if collated_features_tsv is the default name."
               "Enables collating over chunked datasets."),
     ),
 ):
     """Extract electrostatic features from multiple sets of MCCE folders."""
-    core.extract_subfolders_with_book(simulations_folder, subfolders_startwith, collated_features_tsv)
+    core.extract_subfolders_with_book(simulations_folder, subfolders_startwith)
+
+@app.command("collate-tsv")
+def collate_tsv_cmd(
+    simulations_folder: str = typer.Argument(
+        ...,
+        help=("Path to a folder with a collection of simulation folders. "),
+    ),
+    feat_filepaths_file: str = typer.Option(
+        help="File listing the tsv filepaths (str) to collate."
+    ),
+    collated_features_tsv: str = typer.Option(
+        core.COLLATED_FEATURES_TSV,
+        help="Collated features TSV filename (not filepath)."
+    ),
+    batch_size: int = typer.Argument(
+        10,
+        help=("Batch size"),
+    ),
+):
+    """Collate electrostatic features from multiple sets of MCCE folders."""
+    core.collate_features_files(simulations_folder,
+                                feat_filepaths_file,
+                                collated_tsv_name=collated_features_tsv,
+                                batch_size=batch_size)
 
 
 if __name__ == "__main__":

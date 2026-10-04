@@ -5,12 +5,11 @@ import csv
 from collections import Counter
 from functools import partial
 import logging
+import multiprocessing as mp
 from pathlib import Path
 from re import split as re_split
-from typing import Union
+from typing import List, Union
 
-from numpy import float32 as np_float32
-from numpy import number as np_number
 import pandas as pd
 from rich.traceback import install
 
@@ -23,6 +22,9 @@ install(show_locals=False)
 read_tsv = partial(pd.read_csv, sep="\t")
 
 FEATURES_TSV = "mcce_elefeatures.tsv"
+COLLATED_FEATURES_TSV = "collated_mcce_elefeatures.tsv"
+FEATURE_FILEPATHS_FNAME = "features_filepaths.txt"
+
 BOOK_HEADER_LINES = 3
 BOOK_FOOTER_LINES = 5
 
@@ -104,7 +106,8 @@ def extract_folders(
                     ]
 
     if not folder_paths:
-        raise ValueError(f"No folders found in {folders_fp.parent}")
+        logging.warning(f"No folders found in {folders_fp.parent}")
+        return
 
     folder_name_counts = Counter(folder.name for folder in folder_paths)
     duplicate_names = {
@@ -180,45 +183,14 @@ def get_sims_dirs(sims_dir: str=".", subfolders_startwith: str = "") -> list:
     return dirs_lst
 
 
-def collate_features_files(sims_dir: Union[str,Path],
-                           tsv_lst: list,
-                           collated_tsv: str = FEATURES_TSV
-):
-    """Collate all features files in tsv_lst that have data
-    into sims_dir/collated_tsv.
-    """
-    hdr = None
-    sims_dir = Path(sims_dir)
-    out_path = sims_dir.joinpath(collated_tsv)
-    with open(out_path, "w") as fo:
-        for tsv in tsv_lst:
-            lines = sims_dir.joinpath(tsv).read_text().splitlines()
-            if not lines:
-                continue
-            if hdr is None:
-                hdr = lines[0]
-                fo.write(f"{hdr}\n")
-    
-            data_lines = lines[1:]
-            if not data_lines:
-                continue
-            logging.info(f">> Collating {tsv!s}")
-            fo.writelines("\n".join(line for line in data_lines))
-
-    logging.info(f"Collated features into {out_path}")
-
-    return
-
-
 def extract_subfolders_with_book(sims_dir: str = ".",
-                                 subfolders_startwith: str = "",
-                                 collated_tsv_name: str = FEATURES_TSV):
+                                 subfolders_startwith: str = "",):
     """
     Run extract_folders in all subfolders of a set of simulations 
     folders (sims_dir) that have a book.txt file.
     Expected sim_dir subfolders' structure:
         sim1_dir/
-          - [runs/]  #prot folders may be under runs/; used if found
+          - [runs/]  # prot folders may be under runs/; used if found
           - PDB1/
           - PDB2/
           ...
@@ -228,14 +200,15 @@ def extract_subfolders_with_book(sims_dir: str = ".",
 
     1. Get all the dirs with book.txt
     2. Run extract_folders(book_fp)
-    3. Collate all mcce_elefeatures.tsv files
+    3. Save list of tsv files to collate in file with name ending with 'features_filepaths.txt'
+       for next command 'collate-tsv'.
     """
     # list of book filepaths:
-    collated_tsv_is_default = collated_tsv_name == FEATURES_TSV
     dirs_lst = get_sims_dirs(sims_dir=sims_dir, subfolders_startwith=subfolders_startwith)
+    sims_dir = Path(sims_dir).resolve()
+
     if not dirs_lst:
-        msg = f"{Path(sims_dir).resolve().name}: No subfolders with a book.txt file."
-        logging.info(msg)
+        logging.warning(f"{sims_dir.name}: No subfolders with a book.txt file.")
         return
 
     tsv_lst = []
@@ -244,28 +217,77 @@ def extract_subfolders_with_book(sims_dir: str = ".",
         extract_folders(book_fp, tsv_fp)
 
         if tsv_fp.exists():
-            tsv_lst.append(tsv_fp)
+            tsv_lst.append(str(tsv_fp))
         else:
             if book_fp.parent.name=="runs":
                 missing_tsv = f"{book_fp.parent.parent.name}/runs"
             else:
-                missing_tsv = book_fp.parent.name
+                missing_tsv = str(book_fp.parent.name)
             tsv_lst.append(f"# {missing_tsv}: No features tsv file.")
 
     if tsv_lst:
-        # save list
+        # save list for separate command 'collate-tsv'
         if subfolders_startwith:
-            feats_files_fp = Path(sims_dir).joinpath(f"{subfolders_startwith}_features_filepaths.txt")
-            if collated_tsv_is_default:   # add prefix:
-                collated_tsv_name = f"{subfolders_startwith}_{FEATURES_TSV}"
+            feats_filepaths_fp = sims_dir.joinpath(f"{subfolders_startwith}_features_filepaths.txt")
         else:
-            feats_files_fp = Path(sims_dir).joinpath("features_filepaths.txt")
+            feats_filepaths_fp = sims_dir.joinpath("features_filepaths.txt")
 
-        with open(feats_files_fp, "w") as fh:
+        logging.info(f"Saving list of tsv files to collate to: {feats_filepaths_fp!s}...")
+        with open(feats_filepaths_fp, "w") as fh:
             fh.write("\n".join(f"{tsv!s}" for tsv in tsv_lst) + "\n")
-
-        collate_features_files(sims_dir, tsv_lst, collated_tsv_name)
     else:
         logging.warning("No features files found.")
 
     return
+
+
+def _read_csv(files: List[str]):
+    """Multiprocessing pooling function
+    """
+    return pd.concat([pd.read_csv(filename) for filename in files])
+
+
+def mp_collate_features_files(tsv_lst: List[str],
+                              collated_fp: Path,
+                              batch: int = 10,
+):
+    """Collate all features files in tsv_lst into sims_dir/collated_tsv.
+    """
+    n_files = len(tsv_lst)
+    logging.info(f"Collating {n_files:,}...")
+    with mp.Pool(mp.cpu_count()) as pool:
+        dfs = pool.map(_read_csv, (tsv_lst[i:i+batch] for i in range(0, n_files, batch)))
+
+    df = pd.concat(dfs)
+    df.to_csv(collated_fp, index=False, sep="\t")
+    logging.info(f"Collated features into {collated_fp!s}")
+
+    return
+
+
+def collate_features_files(sims_dir: Union[str,Path],
+                           feat_filepaths_file: Union[str,Path],
+                           collated_tsv_name: str = COLLATED_FEATURES_TSV,
+                           batch_size: int = 10,
+):
+    """Collate all features files listed in feat_filepaths_file into sims_dir/collated_tsv_name.
+    """
+    sims_dir = Path(sims_dir)
+    feat_filepaths_fp = sims_dir.joinpath(feat_filepaths_file)
+    if not feat_filepaths_fp.exists():
+        logging.critical("The filepaths file does not exists.")
+        return
+
+    tsv_lst = [fp for fp in feat_filepaths_fp.read_text().splitlines()
+               if not fp.startswith("#") and Path(fp).exists()]
+    if not tsv_lst:
+        logging.critical("Empty list from filepaths file. All lines are commented? Paths not found?")
+        return
+
+    mp_collate_features_files(tsv_lst, sims_dir.joinpath(collated_tsv_name), batch=batch_size)
+
+    logging.info("Collation over.")
+
+    return
+
+
