@@ -243,8 +243,14 @@ def extract_subfolders_with_book(sims_dir: str = ".",
 
 def _read_csv(files: List[str]):
     """Multiprocessing pooling function
+    Note:
+    Previous version with pd.read_csv led to a misformated collated file,
+    which can be fixed by running this command prior to loading into pandas:
+    ```
+    sed -i 's/"//g' compiled_mcce_elefeatures.tsv
+    ```
     """
-    return pd.concat([pd.read_csv(filename) for filename in files])
+    return pd.concat([read_tsv(filename) for filename in files])
 
 
 def mp_collate_features_files(tsv_lst: List[str],
